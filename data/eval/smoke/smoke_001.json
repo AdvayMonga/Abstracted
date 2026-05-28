@@ -1,0 +1,29 @@
+{
+  "title": {
+    "value": "On the Foundations of Document Understanding",
+    "bbox": null,
+    "confidence": 1.0
+  },
+  "authors": [
+    {
+      "value": "Ada Lovelace",
+      "bbox": null,
+      "confidence": 1.0
+    },
+    {
+      "value": "Alan Turing",
+      "bbox": null,
+      "confidence": 1.0
+    }
+  ],
+  "abstract": {
+    "value": "We study the problem of extracting structured information from research papers. Our approach combines a vision-language model with a downstream agent. Experiments on a small held-out set indicate the approach is promising.",
+    "bbox": null,
+    "confidence": 1.0
+  },
+  "methods": null,
+  "datasets": [],
+  "tools_code": [],
+  "key_results": [],
+  "citations": []
+}
