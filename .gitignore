@@ -48,9 +48,11 @@ logs/
 # Data (large / generated). Keep eval fixtures and .gitkeep markers.
 data/raw/
 data/labeled/
+data/labeled_aug/
 data/interim/
 data/processed/
 data/cache/
+data/splits/
 !data/**/.gitkeep
 
 # Model artifacts / checkpoints
@@ -85,3 +87,6 @@ minio-data/
 # LangSmith / traces (local)
 .langsmith/
 traces/
+
+CLAUDE.md
+ROADMAP.md

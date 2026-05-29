@@ -1,0 +1,8 @@
+[core]
+    no_scm = True
+    remote = minio
+['remote "minio"']
+    url = s3://abstracted/dvc
+    endpointurl = http://localhost:9000
+    access_key_id = abstracted
+    secret_access_key = abstracted-secret

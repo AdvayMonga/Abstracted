@@ -45,6 +45,18 @@ services:
       timeout: 5s
       retries: 5
 
+  grobid:
+    image: lfoppiano/grobid:0.8.1
+    ports:
+      - "8070:8070"
+    environment:
+      JAVA_OPTS: "-Xmx4g"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8070/api/isalive"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
 volumes:
   pgdata:
   redisdata:
