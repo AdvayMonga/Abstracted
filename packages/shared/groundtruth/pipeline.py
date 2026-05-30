@@ -70,9 +70,12 @@ def build(arxiv_id: str, pdf_path: Path, grobid_url: str = grobid.GROBID_URL) ->
     except Exception as e:
         errors.append(f"pwc: {e}")
 
-    # 4. key_results regex
+    # 4. key_results regex (with conclusion section as fallback)
+    conclusion_text = None
+    if "gx" in locals():
+        conclusion_text = gx.conclusion_text  # type: ignore[has-type]
     krs: list[ExtractedField[str]] = []
-    for kr in key_results.extract(results_text):
+    for kr in key_results.extract(results_text, fallback_text=conclusion_text):
         krs.append(ExtractedField(value=kr, bbox=None, confidence=CONF_REGEX))
 
     paper = Paper(

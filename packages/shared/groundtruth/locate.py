@@ -17,9 +17,14 @@ from packages.extraction.schema import BBox
 _WS = re.compile(r"\s+")
 _ANCHOR_TOKENS = 5
 _LOOKAHEAD = 4
+# Punctuation that PyMuPDF doesn't always treat as a word boundary but should be.
+_SPLIT_CHARS = re.compile(r"[—–:;]+")
 
 
 def _norm(s: str) -> str:
+    # Replace em/en dash, colon, semicolon with spaces so they tokenize the same way
+    # whether they appear in the query or in PDF text (PyMuPDF doesn't split on them).
+    s = _SPLIT_CHARS.sub(" ", s)
     return _WS.sub(" ", s.strip().lower())
 
 
@@ -33,6 +38,14 @@ class _Word:
     text: str
 
 
+def _split_word(w: _Word) -> list[_Word]:
+    """Split a word on em-dash/en-dash/colon/semicolon. Each sub-word keeps the bbox."""
+    parts = [p for p in _SPLIT_CHARS.split(w.text) if p]
+    if len(parts) <= 1:
+        return [w]
+    return [_Word(w.page, w.x0, w.y0, w.x1, w.y1, p) for p in parts]
+
+
 def _collect_words(doc: pymupdf.Document, max_pages: int = 2) -> list[_Word]:
     out: list[_Word] = []
     n = min(doc.page_count, max_pages)
@@ -40,7 +53,8 @@ def _collect_words(doc: pymupdf.Document, max_pages: int = 2) -> list[_Word]:
         words = cast(list[Any], doc[i].get_text("words"))
         for w in words:
             x0, y0, x1, y1, text = w[0], w[1], w[2], w[3], w[4]
-            out.append(_Word(i, x0, y0, x1, y1, text))
+            base = _Word(i, x0, y0, x1, y1, text)
+            out.extend(_split_word(base))
     return out
 
 

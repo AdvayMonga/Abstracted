@@ -5,7 +5,7 @@ from __future__ import annotations
 import pymupdf  # type: ignore[import-untyped]
 import pytest
 
-from packages.shared.groundtruth.locate import locate
+from packages.shared.groundtruth.locate import _split_word, _Word, locate
 
 
 @pytest.fixture
@@ -38,6 +38,18 @@ def test_locate_multiline_spans_full_paragraph(simple_doc: pymupdf.Document) -> 
 
 def test_locate_returns_none_for_missing(simple_doc: pymupdf.Document) -> None:
     assert locate(simple_doc, "this phrase does not appear anywhere") is None
+
+
+def test_split_chars_break_glued_tokens() -> None:
+    """Words containing em/en dash, colon, semicolon should split into sub-tokens
+    sharing the same bbox, so a query that doesn't include the punctuation matches."""
+    w = _Word(page=0, x0=10, y0=10, x1=100, y1=20, text="Abstract—Digital")
+    parts = _split_word(w)
+    assert [p.text for p in parts] == ["Abstract", "Digital"]
+    assert all(p.x0 == 10 and p.x1 == 100 for p in parts)
+
+    w2 = _Word(page=0, x0=0, y0=0, x1=50, y1=10, text="state:of:art")
+    assert [p.text for p in _split_word(w2)] == ["state", "of", "art"]
 
 
 def test_locate_handles_hyphenation() -> None:

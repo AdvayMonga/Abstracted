@@ -27,6 +27,26 @@ def test_picks_sota_mentions() -> None:
     assert len(out) == 1
 
 
+def test_falls_back_to_conclusion() -> None:
+    """When results section is empty, scan the conclusion."""
+    out = extract(
+        results_text=None,
+        fallback_text=(
+            "Our method outperforms prior work by a substantial margin on every benchmark."
+        ),
+    )
+    assert len(out) == 1
+
+
+def test_picks_improvement_verbs() -> None:
+    text = (
+        "Our proposed method outperforms the strongest baseline on the standard benchmark suite. "
+        "The model is implemented in JAX with several engineering optimizations applied."
+    )
+    out = extract(text)
+    assert any("outperforms" in s for s in out)
+
+
 def test_respects_max_n() -> None:
     text = " ".join(
         f"On benchmark number {i}, our proposed model achieves {80 + i}% top-1 accuracy."

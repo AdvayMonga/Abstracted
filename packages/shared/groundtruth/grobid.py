@@ -68,6 +68,7 @@ class GrobidExtraction:
     methods_bbox: BBox | None = None
     results_text: str | None = None
     results_bbox: BBox | None = None
+    conclusion_text: str | None = None
     citations: list[tuple[Citation, BBox | None]] = field(default_factory=list)
 
 
@@ -78,6 +79,7 @@ _METHOD_HEAD = re.compile(
     re.IGNORECASE,
 )
 _RESULTS_HEAD = re.compile(r"\b(result|experiment|evaluation|finding)", re.IGNORECASE)
+_CONCLUSION_HEAD = re.compile(r"\b(conclusion|discussion|summary)", re.IGNORECASE)
 _INTRO_HEAD = re.compile(r"\b(introduction|background|related work|preliminaries)", re.IGNORECASE)
 
 
@@ -164,13 +166,19 @@ def parse_tei(tei_xml: bytes) -> GrobidExtraction:
     root = etree.fromstring(tei_xml)
     out = GrobidExtraction()
 
-    methods_div = _section_by_head(root, _METHOD_HEAD) or _fallback_methods_section(root)
+    methods_div = _section_by_head(root, _METHOD_HEAD)
+    if methods_div is None:
+        methods_div = _fallback_methods_section(root)
     if methods_div is not None:
         out.methods_text, out.methods_bbox = _section_body(methods_div)
 
     results_div = _section_by_head(root, _RESULTS_HEAD)
     if results_div is not None:
         out.results_text, out.results_bbox = _section_body(results_div)
+
+    conclusion_div = _section_by_head(root, _CONCLUSION_HEAD)
+    if conclusion_div is not None:
+        out.conclusion_text, _ = _section_body(conclusion_div)
 
     for bs in root.xpath(".//t:listBibl/t:biblStruct", namespaces=TEI_NS):
         cit = _parse_citation(bs)
