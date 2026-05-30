@@ -13,6 +13,8 @@ dependencies = [
     "lxml>=5.2",
     "pillow>=10.0",
     "datasets>=3.0",
+    "anthropic>=0.40",
+    "python-dotenv>=1.0",
 ]
 
 [dependency-groups]
