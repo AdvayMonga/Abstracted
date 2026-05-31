@@ -43,7 +43,7 @@
 | abstract | 100.0% |
 | abstract_bbox | 92.4% |
 | methods | 83.0% |
-| tools_code | 0.0% |
+| tools_code | 39.2% |
 | key_results | 57.3% |
 
 ## Token length (Q1 / median / Q3)
