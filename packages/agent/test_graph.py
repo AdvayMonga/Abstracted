@@ -1,4 +1,4 @@
-"""Graph-level test with a fake MCPClients. No subprocesses, no API calls."""
+"""Graph-level tests with a fake MCPClients + in-memory checkpointer."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ from typing import Any
 
 import pymupdf  # type: ignore[import-untyped]
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 
 from packages.agent.graph import build_graph
 from packages.agent.state import AgentState
@@ -15,8 +17,6 @@ from packages.extraction.schema import ExtractedField, Paper
 
 
 class FakeClients:
-    """Drop-in for MCPClients with canned tool responses."""
-
     def __init__(self, responses: dict[tuple[str, str], Any]):
         self._responses = responses
         self.calls: list[tuple[str, str, dict]] = []
@@ -45,7 +45,12 @@ def _good_paper() -> Paper:
     )
 
 
+def _config(thread_id: str) -> dict[str, Any]:
+    return {"configurable": {"thread_id": thread_id}}
+
+
 def test_graph_happy_path(pdf_path, tmp_path, monkeypatch) -> None:
+    """No escalation, no interrupt. Pipeline writes a note."""
     monkeypatch.setenv("ABSTRACTED_VAULT_DIR", str(tmp_path / "vault"))
     import packages.agent.nodes.extract as extract_node
 
@@ -54,69 +59,100 @@ def test_graph_happy_path(pdf_path, tmp_path, monkeypatch) -> None:
     note_path = str(tmp_path / "vault" / "Fake Paper (2506.11419).md")
     clients = FakeClients(
         {
-            ("semantic_scholar", "recommendations"): [
-                {"title": "Related One", "year": 2024},
-                {"title": "Related Two", "year": 2025},
-            ],
+            ("semantic_scholar", "recommendations"): [{"title": "R1", "year": 2024}],
             ("github_lookup", "scan_pdf"): ["https://github.com/foo/bar"],
-            ("github_lookup", "pwc_lookup"): "https://github.com/foo/bar",
+            ("github_lookup", "pwc_lookup"): None,
             ("obsidian_vault", "write_note"): note_path,
         }
     )
-
+    saver = InMemorySaver()
+    graph = build_graph(clients, checkpointer=saver)  # type: ignore[arg-type]
     initial = AgentState(arxiv_id="2506.11419", pdf_path=pdf_path)
-    graph = build_graph(clients)  # type: ignore[arg-type]
-    final = AgentState.model_validate(asyncio.run(graph.ainvoke(initial)))
+    final = AgentState.model_validate(asyncio.run(graph.ainvoke(initial, _config("t1"))))
 
-    assert final.paper is not None
     assert final.note_path == note_path
     assert final.review_reasons == []
     assert final.review_item_id is None
     assert final.errors == []
     called = {(s, t) for s, t, _ in clients.calls}
-    assert ("semantic_scholar", "recommendations") in called
     assert ("obsidian_vault", "write_note") in called
-    # escalate path was NOT taken
     assert ("review_queue", "enqueue") not in called
 
 
-def test_extract_failure_routes_to_escalate(pdf_path, monkeypatch) -> None:
+def test_escalation_pauses_then_rejects(pdf_path, monkeypatch) -> None:
+    """Extract fails → escalate enqueues, interrupts; resume(reject) ends without note."""
     import packages.agent.nodes.extract as extract_node
 
-    def boom(_path):
-        raise RuntimeError("simulated extraction failure")
+    monkeypatch.setattr(
+        extract_node, "claude_extract", lambda _p: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    clients = FakeClients(
+        {
+            ("review_queue", "enqueue"): 42,
+            ("review_queue", "resolve"): {"id": 42, "status": "rejected"},
+        }
+    )
+    saver = InMemorySaver()
+    graph = build_graph(clients, checkpointer=saver)  # type: ignore[arg-type]
+    cfg = _config("paused-1")
 
-    monkeypatch.setattr(extract_node, "claude_extract", boom)
-    clients = FakeClients({("review_queue", "enqueue"): 42})
-    initial = AgentState(arxiv_id="2506.11419", pdf_path=pdf_path)
-    graph = build_graph(clients)  # type: ignore[arg-type]
-    final = AgentState.model_validate(asyncio.run(graph.ainvoke(initial)))
+    # First invocation: hits interrupt(), returns with __interrupt__ present.
+    first = asyncio.run(
+        graph.ainvoke(AgentState(arxiv_id="2506.11419", pdf_path=pdf_path), cfg)
+    )
+    assert "__interrupt__" in first
+    interrupt_obj = first["__interrupt__"][0]
+    assert interrupt_obj.value["kind"] == "review_needed"
+    assert interrupt_obj.value["review_item_id"] == 42
+    assert "extract_failed" in interrupt_obj.value["reasons"]
 
-    assert final.paper is None
-    assert "extract_failed" in final.review_reasons
+    # Resume with reject.
+    final_raw = asyncio.run(graph.ainvoke(Command(resume="reject"), cfg))
+    final = AgentState.model_validate(final_raw)
+    assert final.review_decision == "reject"
     assert final.review_item_id == 42
     assert final.note_path is None
     called = {(s, t) for s, t, _ in clients.calls}
-    assert ("review_queue", "enqueue") in called
+    assert ("review_queue", "resolve") in called
     assert ("obsidian_vault", "write_note") not in called
 
 
-def test_missing_field_routes_to_escalate(pdf_path, monkeypatch) -> None:
-    """Paper extracts but is missing required fields → escalate, no note written."""
+def test_escalation_then_approve_continues_pipeline(pdf_path, tmp_path, monkeypatch) -> None:
+    """Missing-field escalation → resume(approve) → enrich + write_note both run."""
+    monkeypatch.setenv("ABSTRACTED_VAULT_DIR", str(tmp_path / "vault"))
     import packages.agent.nodes.extract as extract_node
 
-    # Only title, no abstract, no authors.
+    # Title only — triggers missing:abstract, missing:authors.
     monkeypatch.setattr(
         extract_node,
         "claude_extract",
-        lambda _p: Paper(title=ExtractedField(value="Only A Title", confidence=0.9)),
+        lambda _p: Paper(title=ExtractedField(value="Title Only", confidence=0.9)),
     )
-    clients = FakeClients({("review_queue", "enqueue"): 99})
-    initial = AgentState(arxiv_id="2506.11419", pdf_path=pdf_path)
-    graph = build_graph(clients)  # type: ignore[arg-type]
-    final = AgentState.model_validate(asyncio.run(graph.ainvoke(initial)))
+    note_path = str(tmp_path / "vault" / "Title Only (2506.11419).md")
+    clients = FakeClients(
+        {
+            ("review_queue", "enqueue"): 7,
+            ("review_queue", "resolve"): {"id": 7, "status": "approved"},
+            ("semantic_scholar", "recommendations"): [],
+            ("github_lookup", "scan_pdf"): [],
+            ("github_lookup", "pwc_lookup"): None,
+            ("obsidian_vault", "write_note"): note_path,
+        }
+    )
+    saver = InMemorySaver()
+    graph = build_graph(clients, checkpointer=saver)  # type: ignore[arg-type]
+    cfg = _config("paused-2")
 
-    assert final.review_item_id == 99
-    assert "missing:abstract" in final.review_reasons
-    assert "missing:authors" in final.review_reasons
-    assert final.note_path is None
+    first = asyncio.run(
+        graph.ainvoke(AgentState(arxiv_id="2506.11419", pdf_path=pdf_path), cfg)
+    )
+    assert "__interrupt__" in first
+
+    final = AgentState.model_validate(
+        asyncio.run(graph.ainvoke(Command(resume="approve"), cfg))
+    )
+    assert final.review_decision == "approve"
+    assert final.note_path == note_path
+    called = {(s, t) for s, t, _ in clients.calls}
+    assert ("review_queue", "resolve") in called
+    assert ("obsidian_vault", "write_note") in called

@@ -21,5 +21,6 @@ class AgentState(BaseModel):
 
     review_reasons: list[str] = Field(default_factory=list)
     review_item_id: int | None = None
+    review_decision: str | None = None  # set on resume: approve | reject | defer
 
     errors: list[str] = Field(default_factory=list)

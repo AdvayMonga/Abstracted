@@ -1,16 +1,17 @@
 """Build the LangGraph state machine.
 
-  extract -> triage -> [escalate -> END]
+  extract -> triage -> [escalate -> interrupt() -> [approve -> enrich_related ...]
+                                                   [reject/defer -> END]]
                     \\-> enrich_related -> enrich_code -> write_note -> END
 
-Conditional edge after triage. Postgres checkpointer + interrupt() come in
-slice 3.
+Compiled with a checkpointer so state survives kills and human delays.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 
 from packages.agent.clients import MCPClients
@@ -25,9 +26,9 @@ from packages.agent.nodes import (
 from packages.agent.state import AgentState
 
 
-def build_graph(clients: MCPClients) -> Any:
-    """Return a compiled LangGraph runnable bound to the given MCP session pool."""
-
+def build_graph(
+    clients: MCPClients, checkpointer: BaseCheckpointSaver | None = None
+) -> Any:
     async def _extract(state: AgentState) -> dict[str, Any]:
         return await extract.run(state, clients)
 
@@ -61,9 +62,13 @@ def build_graph(clients: MCPClients) -> Any:
         triage.needs_review,
         {"escalate": "escalate", "enrich_related": "enrich_related"},
     )
-    g.add_edge("escalate", END)
+    g.add_conditional_edges(
+        "escalate",
+        escalate.after_escalate,
+        {"enrich_related": "enrich_related", "end": END},
+    )
     g.add_edge("enrich_related", "enrich_code")
     g.add_edge("enrich_code", "write_note")
     g.add_edge("write_note", END)
 
-    return g.compile()
+    return g.compile(checkpointer=checkpointer) if checkpointer else g.compile()
