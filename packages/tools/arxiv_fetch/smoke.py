@@ -16,16 +16,16 @@ async def _run(arxiv_id: str) -> None:
     params = StdioServerParameters(
         command="uv", args=["run", "python", "-m", "packages.tools.arxiv_fetch"]
     )
-    async with stdio_client(params) as (r, w):
-        async with ClientSession(r, w) as s:
-            await s.initialize()
-            tools = await s.list_tools()
-            print("tools:", [t.name for t in tools.tools])
-            result = await s.call_tool("fetch_metadata", {"arxiv_id": arxiv_id})
-            print("fetch_metadata result:")
-            for c in result.content:
-                if hasattr(c, "text"):
-                    print(c.text)
+    async with stdio_client(params) as (r, w), ClientSession(r, w) as s:
+        await s.initialize()
+        tools = await s.list_tools()
+        print("tools:", [t.name for t in tools.tools])
+        result = await s.call_tool("fetch_metadata", {"arxiv_id": arxiv_id})
+        print("fetch_metadata result:")
+        for c in result.content:
+            text = getattr(c, "text", None)
+            if text:
+                print(text)
 
 
 def main() -> None:
