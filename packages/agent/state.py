@@ -19,4 +19,7 @@ class AgentState(BaseModel):
     code_urls: list[str] = Field(default_factory=list)
     note_path: str | None = None
 
+    review_reasons: list[str] = Field(default_factory=list)
+    review_item_id: int | None = None
+
     errors: list[str] = Field(default_factory=list)

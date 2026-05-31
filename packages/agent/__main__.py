@@ -36,10 +36,14 @@ def main(pdf_path: Path = typer.Argument(..., help="Path to PDF on disk.")) -> N
         typer.echo(f"No such file: {pdf_path}", err=True)
         sys.exit(1)
     final = asyncio.run(_run(pdf_path))
-    typer.echo(f"arxiv_id:  {final.arxiv_id}")
-    typer.echo(f"note:      {final.note_path}")
-    typer.echo(f"code urls: {len(final.code_urls)}")
-    typer.echo(f"related:   {len(final.related_papers)}")
+    typer.echo(f"arxiv_id:    {final.arxiv_id}")
+    if final.review_item_id is not None:
+        typer.echo(f"escalated:   review item #{final.review_item_id}")
+        typer.echo(f"reasons:     {', '.join(final.review_reasons)}")
+    else:
+        typer.echo(f"note:        {final.note_path}")
+        typer.echo(f"code urls:   {len(final.code_urls)}")
+        typer.echo(f"related:     {len(final.related_papers)}")
     if final.errors:
         typer.echo("errors:", err=True)
         for e in final.errors:

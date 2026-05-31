@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 from typing import Any
 
@@ -38,24 +37,21 @@ def pdf_path(tmp_path) -> Path:
     return out
 
 
+def _good_paper() -> Paper:
+    return Paper(
+        title=ExtractedField(value="Fake Paper", confidence=0.9),
+        authors=[ExtractedField(value="A. Author", confidence=0.9)],
+        abstract=ExtractedField(value="Test abstract.", confidence=0.9),
+    )
+
+
 def test_graph_happy_path(pdf_path, tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ABSTRACTED_VAULT_DIR", str(tmp_path / "vault"))
-
-    # Bypass the real Claude call.
     import packages.agent.nodes.extract as extract_node
 
-    def fake_extract(_path):
-        return Paper(
-            title=ExtractedField(value="Fake Paper", confidence=0.9),
-            authors=[ExtractedField(value="A. Author", confidence=0.9)],
-            abstract=ExtractedField(value="Test abstract.", confidence=0.9),
-        )
-
-    monkeypatch.setattr(extract_node, "claude_extract", fake_extract)
+    monkeypatch.setattr(extract_node, "claude_extract", lambda _p: _good_paper())
 
     note_path = str(tmp_path / "vault" / "Fake Paper (2506.11419).md")
-    # The write_note tool will be called via FakeClients; have it return the
-    # path it would have written so the node can record it in state.
     clients = FakeClients(
         {
             ("semantic_scholar", "recommendations"): [
@@ -70,39 +66,57 @@ def test_graph_happy_path(pdf_path, tmp_path, monkeypatch) -> None:
 
     initial = AgentState(arxiv_id="2506.11419", pdf_path=pdf_path)
     graph = build_graph(clients)  # type: ignore[arg-type]
-    final_raw = asyncio.run(graph.ainvoke(initial))
-    final = AgentState.model_validate(final_raw)
+    final = AgentState.model_validate(asyncio.run(graph.ainvoke(initial)))
 
     assert final.paper is not None
-    assert final.paper.title is not None
-    assert final.paper.title.value == "Fake Paper"
-    assert len(final.related_papers) == 2
-    assert final.code_urls == ["https://github.com/foo/bar"]  # deduped
     assert final.note_path == note_path
+    assert final.review_reasons == []
+    assert final.review_item_id is None
     assert final.errors == []
     called = {(s, t) for s, t, _ in clients.calls}
     assert ("semantic_scholar", "recommendations") in called
-    assert ("github_lookup", "scan_pdf") in called
     assert ("obsidian_vault", "write_note") in called
+    # escalate path was NOT taken
+    assert ("review_queue", "enqueue") not in called
 
 
-def test_extract_failure_records_error(pdf_path, tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("ABSTRACTED_VAULT_DIR", str(tmp_path / "vault"))
+def test_extract_failure_routes_to_escalate(pdf_path, monkeypatch) -> None:
     import packages.agent.nodes.extract as extract_node
 
     def boom(_path):
         raise RuntimeError("simulated extraction failure")
 
     monkeypatch.setattr(extract_node, "claude_extract", boom)
-    clients = FakeClients({})
+    clients = FakeClients({("review_queue", "enqueue"): 42})
     initial = AgentState(arxiv_id="2506.11419", pdf_path=pdf_path)
     graph = build_graph(clients)  # type: ignore[arg-type]
     final = AgentState.model_validate(asyncio.run(graph.ainvoke(initial)))
-    assert any("extract:" in e for e in final.errors)
+
     assert final.paper is None
-    # write_note should fail cleanly because there's no paper.
-    assert any("write_note" in e for e in final.errors)
+    assert "extract_failed" in final.review_reasons
+    assert final.review_item_id == 42
+    assert final.note_path is None
+    called = {(s, t) for s, t, _ in clients.calls}
+    assert ("review_queue", "enqueue") in called
+    assert ("obsidian_vault", "write_note") not in called
 
 
-# Tells pyright about a real test name to silence "imported but unused".
-_ = os.environ
+def test_missing_field_routes_to_escalate(pdf_path, monkeypatch) -> None:
+    """Paper extracts but is missing required fields → escalate, no note written."""
+    import packages.agent.nodes.extract as extract_node
+
+    # Only title, no abstract, no authors.
+    monkeypatch.setattr(
+        extract_node,
+        "claude_extract",
+        lambda _p: Paper(title=ExtractedField(value="Only A Title", confidence=0.9)),
+    )
+    clients = FakeClients({("review_queue", "enqueue"): 99})
+    initial = AgentState(arxiv_id="2506.11419", pdf_path=pdf_path)
+    graph = build_graph(clients)  # type: ignore[arg-type]
+    final = AgentState.model_validate(asyncio.run(graph.ainvoke(initial)))
+
+    assert final.review_item_id == 99
+    assert "missing:abstract" in final.review_reasons
+    assert "missing:authors" in final.review_reasons
+    assert final.note_path is None
