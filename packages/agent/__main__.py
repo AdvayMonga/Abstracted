@@ -116,5 +116,66 @@ def resume(
     asyncio.run(_resume(thread_id, decision))
 
 
+_HIDDEN_KEYS = {"pdf_path", "arxiv_id", "__start__"}
+
+
+def _snapshot_summary(values: dict[str, Any]) -> list[str]:
+    """One-line summaries of fields with content."""
+    from packages.extraction.schema import Paper as _Paper
+
+    lines: list[str] = []
+    for k, v in values.items():
+        if k in _HIDDEN_KEYS:
+            continue
+        if v is None or v == [] or v == "" or v == {}:
+            continue
+        if isinstance(v, list):
+            lines.append(f"  {k}: list[{len(v)}]")
+        elif isinstance(v, _Paper):
+            tv = v.title.value if v.title else None
+            lines.append(f"  {k}: <Paper title={tv!r}>")
+        else:
+            s = str(v)
+            if len(s) > 80:
+                s = s[:77] + "..."
+            lines.append(f"  {k}: {s}")
+    return lines
+
+
+async def _replay(thread_id: str) -> None:
+    config = {"configurable": {"thread_id": thread_id}}
+    async with AsyncPostgresSaver.from_conn_string(_dsn()) as checkpointer:
+        await checkpointer.setup()
+        snapshots = []
+        async for snap in checkpointer.alist(config):  # type: ignore[arg-type]
+            snapshots.append(snap)
+    if not snapshots:
+        typer.echo(f"No checkpoints found for thread_id={thread_id!r}", err=True)
+        sys.exit(1)
+    typer.echo(f"thread_id: {thread_id}")
+    typer.echo(f"steps:     {len(snapshots)}")
+    typer.echo("")
+    for tup in reversed(snapshots):  # oldest first
+        md = tup.metadata or {}
+        step = md.get("step", "?")
+        source = md.get("source", "?")
+        writes = md.get("writes") or {}
+        # writes is {node_name: {channel: value}}; surface the node names.
+        nodes = list(writes.keys()) if writes else []
+        node = ",".join(nodes) if nodes else "(start)"
+        values = tup.checkpoint.get("channel_values", {})
+        typer.echo(f"--- step {step}  [{source}]  node={node}")
+        for line in _snapshot_summary(values):
+            typer.echo(line)
+        typer.echo("")
+
+
+@app.command()
+def replay(
+    thread_id: str = typer.Argument(..., help="Thread id to inspect."),
+) -> None:
+    asyncio.run(_replay(thread_id))
+
+
 if __name__ == "__main__":
     app()

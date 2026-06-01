@@ -53,6 +53,7 @@ data/interim/
 data/processed/
 data/cache/
 data/splits/
+data/vault/
 !data/**/.gitkeep
 
 # Model artifacts / checkpoints
